@@ -1,6 +1,8 @@
 # Python In-built packages
 from pathlib import Path
-import PIL
+import cv2
+import numpy as np
+from PIL import Image
 
 # External packages
 import streamlit as st
@@ -10,25 +12,24 @@ import settings
 import helper
 
 # Setting page layout
-st.set_page_config(
-    page_title="Waste Classification using YOLOv8",
-    page_icon="🤖",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+# st.set_page_config(
+#     page_title="Mang Hijau",
+#     page_icon="🤖",
+#     layout="wide",
+#     initial_sidebar_state="expanded"
+# )
 
 # Main page heading
-st.title("Waste Classification using YOLOv8")
+st.title("Catch the Trash")
 
 # Sidebar
-st.sidebar.header("ML Model Config")
+st.sidebar.header("Klasifikasi")
 
 # Model Options
-model_type = st.sidebar.radio(
-    "Select Task", ['Detection'])
+model_type = 'Detection'
 
-confidence = float(st.sidebar.slider(
-    "Select Model Confidence", 25, 100, 40)) / 100
+# Set the model confidence to a static value of 60%
+confidence = 0.60
 
 # Selecting Detection Or Segmentation
 if model_type == 'Detection':
@@ -43,61 +44,72 @@ except Exception as ex:
     st.error(f"Unable to load model. Check the specified path: {model_path}")
     st.error(ex)
 
-st.sidebar.header("Image/Video Config")
-source_radio = st.sidebar.radio(
-    "Select Source", settings.SOURCES_LIST)
+# Automatically perform detection using webcam
+# Create a container for the webcam stream
+video_container = st.empty()
 
-source_img = None
-# If image is selected
-if source_radio == settings.IMAGE:
-    source_img = st.sidebar.file_uploader(
-        "Choose an image...", type=("jpg", "jpeg", "png", 'bmp', 'webp'))
+# Create a container in the sidebar for classifications
+classification_container = st.sidebar.empty()
 
-    col1, col2 = st.columns(2)
+def classify_object(label_tensor):
+    """Classify the object as 'Organik' or 'Non Organik'."""
+    # Convert the tensor to a label string
+    label = label_tensor.item()  # Get the value from the tensor
 
-    with col1:
-        try:
-            if source_img is None:
-                default_image_path = str(settings.DEFAULT_IMAGE)
-                default_image = PIL.Image.open(default_image_path)
-                st.image(default_image_path, caption="Default Image",
-                         use_column_width=True)
-            else:
-                uploaded_image = PIL.Image.open(source_img)
-                st.image(source_img, caption="Uploaded Image",
-                         use_column_width=True)
-        except Exception as ex:
-            st.error("Error occurred while opening the image.")
-            st.error(ex)
+    # Assume label mapping (you may need to adjust based on your model's labels)
+    if label == 0:  # Assuming 0 corresponds to "Botol_Plastik"
+        return "Non Organik"
+    elif label == 1:  # Assuming 1 corresponds to "Kaleng"
+        return "Non Organik"
+    elif label == 2:  # Assuming 2 corresponds to "Kertas"
+        return "Organik"
+    else:
+        return "Organik"
 
-    with col2:
-        if source_img is None:
-            default_detected_image_path = str(settings.DEFAULT_DETECT_IMAGE)
-            default_detected_image = PIL.Image.open(
-                default_detected_image_path)
-            st.image(default_detected_image_path, caption='Detected Image',
-                     use_column_width=True)
-        else:
-            if st.sidebar.button('Detect Objects'):
-                res = model.predict(uploaded_image,
-                                    conf=confidence
-                                    )
-                boxes = res[0].boxes
-                res_plotted = res[0].plot()[:, :, ::-1]
-                st.image(res_plotted, caption='Detected Image',
-                         use_column_width=True)
-                try:
-                    with st.expander("Detection Results"):
-                        for box in boxes:
-                            st.write(box.data)
-                except Exception as ex:
-                    # st.write(ex)
-                    st.write("No image is uploaded yet!")
+def process_frame(frame):
+    """Process the frame by resizing and performing object detection."""
+    # Resize frame to speed up processing
+    small_frame = cv2.resize(frame, (640, 480))
+    # Perform detection on the frame
+    results = model.predict(small_frame, conf=confidence)
+    boxes = results[0].boxes
+    frame_with_boxes = results[0].plot()[:, :, ::-1]  # Convert from BGR to RGB
+    return frame_with_boxes, boxes
 
-elif source_radio == settings.WEBCAM:
-    helper.play_webcam(confidence, model)
+def play_webcam(confidence, model):
+    """Capture and process video from the webcam."""
+    cap = cv2.VideoCapture(0)  # 0 is typically the default webcam
 
-else:
-    st.error("Please select a valid source type!")
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            st.error("Failed to capture image from webcam.")
+            break
 
+        # Process the frame and update the display
+        frame_with_boxes, boxes = process_frame(frame)
+        video_container.image(frame_with_boxes, channels='RGB', use_column_width=True)
 
+        # Check if any objects are detected
+        if len(boxes) > 0:
+            classifications = []
+            for box in boxes:
+                label_tensor = box.cls  # Get the label tensor
+                classification = classify_object(label_tensor)
+                classifications.append(classification)
+
+                # Save the detected frame as an image
+                image = Image.fromarray(frame_with_boxes)
+                image.save(f"{classification}.jpg")
+
+            # Display the classifications in the sidebar
+            classification_container.markdown("### Klasifikasi:")
+            for classification in classifications:
+                classification_container.markdown(f"- {classification}")
+
+        # Optionally, you can add logic here to break the loop if needed
+
+    cap.release()
+
+# Start processing the webcam feed
+play_webcam(confidence, model)
